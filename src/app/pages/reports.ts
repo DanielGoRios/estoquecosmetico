@@ -6,6 +6,8 @@ import { SHARED } from '../core/shared';
 import { Api } from '../core/api';
 import { Notify } from '../core/notify';
 import { CHANNELS, MOVEMENT_LABELS, ORDER_STATUS, ORDER_STATUS_LIST, SALE_TYPES } from '../core/status';
+import { CompanyGroup, CompanyGroupBy, salesByCompany, weekEndIso, weekStartIso } from '../core/sales-by-company';
+import { RouterLink } from '@angular/router';
 import { addDaysIso, brlFmt, dateFmt, dateTimeFmt, dayEnd, dayStart, downloadCsv, norm, qtyFmt, todayIso } from '../core/util';
 
 type Fmt = 'text' | 'brl' | 'qty' | 'date' | 'dt' | 'pct';
@@ -16,6 +18,7 @@ const REPORTS: { id: string; label: string; filters: string[] }[] = [
   { id: 'posicao', label: 'Posição de estoque (produto, lote, local)', filters: ['categoria', 'produto'] },
   { id: 'validade', label: 'Lotes vencidos e próximos do vencimento', filters: ['categoria', 'produto'] },
   { id: 'minimo', label: 'Produtos abaixo do estoque mínimo', filters: ['categoria', 'produto'] },
+  { id: 'empresa', label: 'Produtos vendidos por empresa (cliente ou marca)', filters: ['periodo', 'semana', 'agrupar', 'canal', 'produto'] },
   { id: 'maisvendidos', label: 'Produtos mais vendidos', filters: ['periodo', 'categoria', 'canal', 'produto'] },
   { id: 'vendas', label: 'Vendas por período, canal e modalidade', filters: ['periodo', 'canal', 'usuario'] },
   { id: 'margem', label: 'Margem bruta estimada', filters: ['periodo', 'categoria', 'canal', 'produto'] },
@@ -25,11 +28,16 @@ const REPORTS: { id: string; label: string; filters: string[] }[] = [
 
 @Component({
   selector: 'app-reports',
-  imports: [...SHARED, MatButtonModule, MatIconModule, MatProgressBarModule],
+  imports: [...SHARED, MatButtonModule, MatIconModule, MatProgressBarModule, RouterLink],
   template: `
     <div class="page">
       <div class="page-head"><div><h1>Relatórios</h1><div class="sub">Filtre, consulte e exporte em CSV</div></div>
-        <button mat-stroked-button (click)="exportCsv()" [disabled]="!result()?.rows?.length"><mat-icon>download</mat-icon>Exportar CSV</button></div>
+        <div class="row">
+          @if (rid === 'empresa' && groups().length) {
+            <a mat-stroked-button target="_blank" [routerLink]="['/imprimir/vendas-empresa']" [queryParams]="{ de: from, ate: to, por: groupBy, canal: channel || null, produto: product || null }"><mat-icon>print</mat-icon>Imprimir / PDF</a>
+          }
+          <button mat-stroked-button (click)="exportCsv()" [disabled]="!result()?.rows?.length"><mat-icon>download</mat-icon>Exportar CSV</button>
+        </div></div>
       <section class="card">
         <div class="row">
           <mat-form-field style="min-width:320px" class="grow"><mat-label>Relatório</mat-label>
@@ -37,6 +45,10 @@ const REPORTS: { id: string; label: string; filters: string[] }[] = [
           @if (has('periodo')) {
             <mat-form-field style="width:160px"><mat-label>De</mat-label><input matInput type="date" [(ngModel)]="from"></mat-form-field>
             <mat-form-field style="width:160px"><mat-label>Até</mat-label><input matInput type="date" [(ngModel)]="to"></mat-form-field>
+          }
+          @if (has('agrupar')) {
+            <mat-form-field style="width:210px"><mat-label>Agrupar por</mat-label><mat-select [(ngModel)]="groupBy" (ngModelChange)="run()">
+              <mat-option value="cliente">Cliente (quem comprou)</mat-option><mat-option value="marca">Marca (fornecedor)</mat-option></mat-select></mat-form-field>
           }
           @if (has('categoria')) {
             <mat-form-field style="width:200px"><mat-label>Categoria</mat-label><mat-select [(ngModel)]="category"><mat-option value="">Todas</mat-option>
@@ -59,6 +71,13 @@ const REPORTS: { id: string; label: string; filters: string[] }[] = [
           }
           <button mat-flat-button (click)="run()"><mat-icon>filter_alt</mat-icon>Aplicar</button>
         </div>
+        @if (has('semana')) {
+          <div class="row" style="margin-top:4px">
+            <button mat-button (click)="setWeek(0)"><mat-icon>date_range</mat-icon>Esta semana</button>
+            <button mat-button (click)="setWeek(-7)">Semana passada</button>
+            <span class="muted small">Semana de segunda a domingo · considera pedidos confirmados (exceto cancelados)</span>
+          </div>
+        }
       </section>
       @if (loading()) { <mat-progress-bar mode="indeterminate" /> }
       @if (error()) { <div class="error-box">{{ error() }}</div> }
@@ -68,6 +87,24 @@ const REPORTS: { id: string; label: string; filters: string[] }[] = [
             @for (t of totalList(); track t.label) { <div class="stat"><div class="lbl">{{ t.label }}</div><div class="val">{{ t.value }}</div></div> }
           </div>
         }
+        @if (rid === 'empresa') {
+          @for (g of groups(); track g.key) {
+            <section class="card">
+              <div class="row" style="justify-content:space-between;align-items:baseline">
+                <h2 style="margin:0">{{ g.empresa }}</h2>
+                <span class="muted small">{{ g.itens.length }} produto(s) · {{ fmt(g.qtd, 'qty') }} un. · {{ g.pedidos }} pedido(s) · {{ fmt(g.receita, 'brl') }}</span>
+              </div>
+              <div class="table-wrap" style="margin-top:10px"><table class="t">
+                <thead><tr><th>SKU</th><th>Produto</th><th class="r">Quantidade</th><th class="r">Pedidos</th><th class="r">Valor</th></tr></thead>
+                <tbody>
+                  @for (l of g.itens; track l.product_id) {
+                    <tr><td>{{ l.sku }}</td><td>{{ l.name }}</td><td class="r mono"><b>{{ fmt(l.qtd, 'qty') }}</b></td><td class="r mono">{{ l.pedidos }}</td><td class="r mono">{{ fmt(l.receita, 'brl') }}</td></tr>
+                  }
+                  <tr><td colspan="2"><b>Total {{ g.empresa }}</b></td><td class="r mono"><b>{{ fmt(g.qtd, 'qty') }}</b></td><td class="r mono">{{ g.pedidos }}</td><td class="r mono"><b>{{ fmt(g.receita, 'brl') }}</b></td></tr>
+                </tbody></table></div>
+            </section>
+          } @empty { <section class="card empty">Nenhum pedido confirmado no período selecionado.</section> }
+        } @else {
         <div class="table-wrap"><table class="t">
           <thead><tr>@for (c of r.cols; track c.k) { <th [class.r]="isNum(c)">{{ c.label }}</th> }</tr></thead>
           <tbody>
@@ -80,6 +117,7 @@ const REPORTS: { id: string; label: string; filters: string[] }[] = [
               <button mat-button (click)="limit.set(limit() + 200)">Mostrar mais</button></div>
           }
         </div>
+        }
       }
     </div>`,
 })
@@ -88,12 +126,17 @@ export class Reports implements OnInit {
   private notify = inject(Notify);
   reports = REPORTS; channelList = Object.entries(CHANNELS); movTypes = Object.entries(MOVEMENT_LABELS);
   rid = 'posicao'; from = addDaysIso(todayIso(), -30); to = todayIso();
-  category = ''; channel = ''; user = ''; mtype = ''; product = '';
+  category = ''; groupBy: CompanyGroupBy = 'cliente'; groups = signal<CompanyGroup[]>([]); channel = ''; user = ''; mtype = ''; product = '';
   categories = signal<any[]>([]); users = signal<any[]>([]);
   loading = signal(false); error = signal(''); result = signal<Result | null>(null); limit = signal(200);
   shown = computed(() => (this.result()?.rows ?? []).slice(0, this.limit()));
   totalList = computed(() => Object.entries(this.result()?.totals ?? {}).map(([label, value]) => ({ label, value })));
 
+  setWeek(offsetDays: number) {
+    const ref = addDaysIso(todayIso(), offsetDays);
+    this.from = weekStartIso(ref); this.to = offsetDays === 0 ? todayIso() : weekEndIso(ref);
+    this.run();
+  }
   has(f: string) { return REPORTS.find(r => r.id === this.rid)?.filters.includes(f) ?? false; }
   isNum(c: Col) { return c.fmt === 'brl' || c.fmt === 'qty' || c.fmt === 'pct'; }
   fmt(v: any, f?: Fmt): string {
@@ -127,7 +170,17 @@ export class Reports implements OnInit {
 
   private async build(): Promise<Result> {
     const sb = this.api.sb;
+    this.groups.set([]);
     switch (this.rid) {
+      case 'empresa': {
+        const { groups, totalPedidos } = await salesByCompany(this.api, { from: this.from, to: this.to, by: this.groupBy, channel: this.channel, product: this.product });
+        this.groups.set(groups);
+        const rows = groups.flatMap(g => g.itens.map(l => ({ empresa: g.empresa, ...l })));
+        const label = this.groupBy === 'cliente' ? 'Cliente' : 'Marca';
+        return { rows, totals: { [this.groupBy === 'cliente' ? 'Clientes' : 'Marcas']: String(groups.length), 'Unidades vendidas': qtyFmt(sum(groups, 'qtd')),
+            'Pedidos': String(totalPedidos), 'Valor': brlFmt(sum(groups, 'receita')) },
+          cols: [{ k: 'empresa', label }, { k: 'sku', label: 'SKU' }, { k: 'name', label: 'Produto' }, { k: 'qtd', label: 'Quantidade', fmt: 'qty' }, { k: 'pedidos', label: 'Pedidos' }, { k: 'receita', label: 'Valor', fmt: 'brl' }] };
+      }
       case 'posicao': {
         const [rows, costs, cats] = await Promise.all([
           this.api.fetchAll(f => sb.from('v_balance_detail').select('*').gt('on_hand', 0).order('product_name').range(f, f + 999)),
@@ -242,7 +295,7 @@ export class Reports implements OnInit {
 
   exportCsv() {
     const r = this.result(); if (!r) return;
-    downloadCsv(`relatorio-${this.rid}-${todayIso()}.csv`, [r.cols.map(c => c.label), ...r.rows.map(row => r.cols.map(c => c.fmt === 'pct' && row[c.k] != null ? (Number(row[c.k]) * 100).toFixed(1) : row[c.k]))]);
+    downloadCsv(this.rid === 'empresa' ? `vendas-por-${this.groupBy}-${this.from}-a-${this.to}.csv` : `relatorio-${this.rid}-${todayIso()}.csv`, [r.cols.map(c => c.label), ...r.rows.map(row => r.cols.map(c => c.fmt === 'pct' && row[c.k] != null ? (Number(row[c.k]) * 100).toFixed(1) : row[c.k]))]);
   }
 }
 

@@ -4,6 +4,7 @@ import { adminGuard, authGuard } from './core/guards';
 export const routes: Routes = [
   { path: 'login', loadComponent: () => import('./pages/login').then(m => m.Login) },
   { path: 'imprimir/pedido/:id', canActivate: [adminGuard], loadComponent: () => import('./pages/print').then(m => m.PrintOrder) },
+  { path: 'imprimir/vendas-empresa', canActivate: [adminGuard], loadComponent: () => import('./pages/print').then(m => m.PrintSalesByCompany) },
   { path: 'imprimir/separacao/:id', canActivate: [authGuard], loadComponent: () => import('./pages/print').then(m => m.PrintPicking) },
   {
     path: '', canActivate: [authGuard], children: [
