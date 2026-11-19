@@ -4,7 +4,8 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { Api } from '../core/api';
 import { CHANNELS, SALE_TYPES } from '../core/status';
-import { BrlPipe, DatePipeBr, DateTimePipeBr, QtyPipe } from '../core/util';
+import { BrlPipe, DatePipeBr, DateTimePipeBr, QtyPipe, todayIso } from '../core/util';
+import { CompanyGroup, CompanyGroupBy, salesByCompany, weekStartIso } from '../core/sales-by-company';
 
 const STORE_HEAD = `
   <div style="display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #000;padding-bottom:8px">
@@ -113,6 +114,59 @@ export class PrintPicking implements OnInit {
   attrs(a: any): string {
     if (!a || typeof a !== 'object') return '';
     return Object.entries(a).filter(([, v]) => v !== null && v !== '').map(([k, v]) => `${k}: ${v}`).join(' · ');
+  }
+  print() { window.print(); }
+}
+
+@Component({
+  selector: 'app-print-sales-company',
+  imports: [MatButtonModule, MatIconModule, BrlPipe, QtyPipe, DatePipeBr],
+  template: `
+    <div class="print-bar"><button mat-flat-button (click)="print()" [disabled]="loading()"><mat-icon>print</mat-icon>Imprimir / Salvar PDF</button></div>
+    @if (error()) { <div class="error-box" style="margin:16px">{{ error() }}</div> }
+    @if (loading()) { <p style="text-align:center;padding:24px">Carregando…</p> }
+    @if (!loading() && !error()) {
+      <div class="print-sheet">
+        ${STORE_HEAD}
+        <div style="text-align:right"><div style="font-size:11px">PRODUTOS VENDIDOS POR {{ by === 'cliente' ? 'CLIENTE' : 'MARCA' }}</div>
+          <div style="font-size:16px;font-weight:700">{{ from | dbr }} a {{ to | dbr }}</div>
+          <div>{{ groups().length }} {{ by === 'cliente' ? 'cliente(s)' : 'marca(s)' }} · {{ totalPedidos() }} pedido(s)</div></div></div>
+        @for (g of groups(); track g.key) {
+          <h2 style="font-size:14px;margin:16px 0 0">{{ g.empresa }}</h2>
+          <table style="margin-top:4px"><thead><tr><th style="width:18%">SKU</th><th>Produto</th><th class="r" style="width:13%">Quantidade</th><th class="r" style="width:16%">Valor</th></tr></thead>
+            <tbody>
+              @for (l of g.itens; track l.product_id) { <tr><td>{{ l.sku }}</td><td>{{ l.name }}</td><td class="r" style="font-weight:700">{{ l.qtd | qty }}</td><td class="r">{{ l.receita | brl }}</td></tr> }
+              <tr><th colspan="2">Total {{ g.empresa }} ({{ g.pedidos }} pedido(s))</th><th class="r">{{ g.qtd | qty }}</th><th class="r">{{ g.receita | brl }}</th></tr>
+            </tbody></table>
+        } @empty { <p style="margin-top:16px">Nenhum pedido confirmado no período.</p> }
+        @if (groups().length) {
+          <table style="width:55%;margin-left:auto;margin-top:16px"><tbody>
+            <tr><th>Unidades vendidas</th><td class="r" style="font-weight:700">{{ totalQtd() | qty }}</td></tr>
+            <tr><th style="font-size:14px">VALOR TOTAL</th><td class="r" style="font-size:14px;font-weight:700">{{ totalValor() | brl }}</td></tr>
+          </tbody></table>
+        }
+      </div>
+    }`,
+})
+export class PrintSalesByCompany implements OnInit {
+  private api = inject(Api);
+  private route = inject(ActivatedRoute);
+  s = signal<any>(null); error = signal(''); loading = signal(true);
+  groups = signal<CompanyGroup[]>([]); totalPedidos = signal(0);
+  totalQtd = () => this.groups().reduce((a, g) => a + g.qtd, 0);
+  totalValor = () => this.groups().reduce((a, g) => a + g.receita, 0);
+  from = ''; to = ''; by: CompanyGroupBy = 'cliente';
+  async ngOnInit() {
+    try {
+      const qp = this.route.snapshot.queryParamMap;
+      this.from = qp.get('de') || weekStartIso(); this.to = qp.get('ate') || todayIso();
+      this.by = qp.get('por') === 'marca' ? 'marca' : 'cliente';
+      this.s.set(await this.api.settings());
+      const r = await salesByCompany(this.api, { from: this.from, to: this.to, by: this.by, channel: qp.get('canal') || '', product: qp.get('produto') || '' });
+      this.groups.set(r.groups); this.totalPedidos.set(r.totalPedidos);
+      document.title = `Vendas por ${this.by} ${this.from} a ${this.to}`;
+    } catch (e: any) { this.error.set(e.message); }
+    this.loading.set(false);
   }
   print() { window.print(); }
 }

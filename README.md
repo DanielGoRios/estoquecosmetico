@@ -22,3 +22,11 @@ O estoquista não lê preços, custos, clientes nem pedidos diretamente: a separ
 
 ## Backup
 Ative backups diários (Supabase > Database > Backups; planos pagos) e teste a restauração periodicamente.
+
+## Relatório: produtos vendidos por empresa
+Em **Relatórios > Produtos vendidos por empresa (cliente ou marca)**:
+- Botões **Esta semana** / **Semana passada** (segunda a domingo) ou período livre.
+- **Agrupar por Cliente** (quem comprou) ou **Marca** (fornecedor) — cada empresa mostra seus produtos com a quantidade, nº de pedidos e valor, e um total.
+- Considera pedidos confirmados no período (ignora rascunhos e cancelados).
+- **Imprimir / PDF** (rota `/imprimir/vendas-empresa`) e **Exportar CSV**.
+Não exige migration: usa as tabelas `order_items`, `orders`, `customers`, `products` e `brands`.
